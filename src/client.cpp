@@ -161,11 +161,23 @@ void SendspinClient::disconnect(SendspinGoodbyeReason reason) {
 }
 
 void SendspinClient::loop() {
+    int64_t stage_started_us = platform_time_us();
+    auto report_slow_stage = [&stage_started_us](const char *stage) {
+        const int64_t now_us = platform_time_us();
+        const int64_t elapsed_us = now_us - stage_started_us;
+        if (elapsed_us >= 30000) {
+            SS_LOGW(TAG, "loop stage %s took %lld ms", stage,
+                    static_cast<long long>(elapsed_us / 1000));
+        }
+        stage_started_us = now_us;
+    };
+
     // Process connection lifecycle events (close, disconnect, hello, handoff, retry)
     this->connection_manager_->loop();
+    report_slow_stage("connection");
 
     // Handle time synchronization for the active connection via burst strategy
-    auto* conn = this->connection_manager_->current();
+    auto *conn = this->connection_manager_->current();
     if (conn != nullptr) {
         auto result = this->time_burst_->loop(conn);
 
@@ -182,6 +194,7 @@ void SendspinClient::loop() {
                 static_cast<float>(conn->get_time_filter()->get_error()));
         }
     }
+    report_slow_stage("time-burst");
 
     // Process deferred events -- all state mutations and user callbacks happen here,
     // on the main loop thread, to avoid cross-thread data races.
@@ -201,37 +214,44 @@ void SendspinClient::loop() {
             }
         }
     }
+    report_slow_stage("time-events");
 
     // --- Role events (each role handles its own synchronization) ---
 #ifdef SENDSPIN_ENABLE_PLAYER
     if (this->player_) {
         this->player_->impl_->drain_events();
     }
+    report_slow_stage("player");
 #endif
 #ifdef SENDSPIN_ENABLE_CONTROLLER
     if (this->controller_) {
         this->controller_->impl_->drain_events();
     }
+    report_slow_stage("controller");
 #endif
 #ifdef SENDSPIN_ENABLE_METADATA
     if (this->metadata_) {
         this->metadata_->impl_->drain_events();
     }
+    report_slow_stage("metadata");
 #endif
 #ifdef SENDSPIN_ENABLE_COLOR
     if (this->color_) {
         this->color_->impl_->drain_events();
     }
+    report_slow_stage("color");
 #endif
 #ifdef SENDSPIN_ENABLE_ARTWORK
     if (this->artwork_) {
         this->artwork_->impl_->drain_events();
     }
+    report_slow_stage("artwork");
 #endif
 #ifdef SENDSPIN_ENABLE_VISUALIZER
     if (this->visualizer_) {
         this->visualizer_->impl_->drain_events();
     }
+    report_slow_stage("visualizer");
 #endif
 
     // --- Group update events ---
@@ -264,6 +284,7 @@ void SendspinClient::loop() {
                     this->group_state_.group_name.value_or("").c_str());
         }
     }
+    report_slow_stage("group");
 }
 
 // ============================================================================
